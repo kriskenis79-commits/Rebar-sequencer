@@ -1,0 +1,6 @@
+{
+  "title": "Rebar Sequencer",
+  "url": "https://YOUR-HOST/rebar-sequencer.html",
+  "description": "Create views per assembly step of a rebar cage",
+  "enabled": true
+}
