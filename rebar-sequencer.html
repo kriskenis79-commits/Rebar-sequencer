@@ -33,7 +33,7 @@
 <div class="row"><label>Grey colour</label><input type="color" id="grey" value="#d3d3d3"></div>
 <div class="row"><label>Opacity (%)</label><input type="range" id="opacity" min="1" max="60" value="10"><span id="opacityVal">10</span></div>
 <div class="row"><label>Rest of model</label>
-  <select id="others"><option value="hide">Hide</option><option value="leave">Leave as it is</option></select></div>
+  <select id="others"><option value="grey">Light grey + transparent</option><option value="hide">Hide</option><option value="leave">Leave as it is</option></select></div>
 <div class="row"><label>Rebars to place</label>
   <select id="activeColor"><option value="reset">Original colour</option><option value="#e8a200">Orange</option><option value="#d62828">Red</option><option value="#0063a3">Blue</option></select></div>
 <div class="row"><label>Camera</label>
@@ -107,6 +107,29 @@ async function resolve(step) {
   return out;
 }
 
+// A Tekla rebar group is ONE object that contains the single bars.
+// This collects the bars inside the selected group(s) as well.
+async function childrenOf(modelId, ids) {
+  const tries = [undefined, 4, 5]; // all types, ElementAssembly, Group
+  for (const t of tries) {
+    try {
+      const r = await API.viewer.getHierarchyChildren(modelId, ids, t, true);
+      if (r && r.length) return r.map(e => e.id);
+    } catch (e) {}
+  }
+  return [];
+}
+async function expandSelection(sel) {
+  if (!sel) return sel;
+  const out = [];
+  for (const s of sel) {
+    const kids = await childrenOf(s.modelId, s.objectRuntimeIds);
+    const all = Array.from(new Set(s.objectRuntimeIds.concat(kids)));
+    out.push({ modelId: s.modelId, objectRuntimeIds: all });
+  }
+  return out;
+}
+
 async function storeItems(sel) {
   const items = [];
   for (const s of sel) {
@@ -119,7 +142,7 @@ async function storeItems(sel) {
 
 async function addFromSelection() {
   if (!API) return log('Not connected.');
-  const sel = await API.viewer.getSelection();
+  const sel = await expandSelection(await API.viewer.getSelection());
   if (!sel || !sel.length) return log('Select the rebars of this step in the 3D view first.');
   steps.push({ name: 'Step ' + String(steps.length + 1).padStart(2, '0'), items: await storeItems(sel) });
   save(); render(); log('Step added.');
@@ -129,7 +152,7 @@ async function buildFromProperty() {
   if (!API) return log('Not connected.');
   const key = $('prop').value.trim().toLowerCase();
   if (!key) return log('Type the property name first.');
-  const sel = await API.viewer.getSelection();
+  const sel = await expandSelection(await API.viewer.getSelection());
   if (!sel || !sel.length) return log('Select the whole rebar cage first.');
   const groups = new Map(); // value -> Map(modelId -> ids)
   for (const s of sel) {
@@ -178,9 +201,12 @@ async function applyStep(i) {
   for (const st of steps) resolved.push(await resolve(st));
   const allBars = mergeByModel(resolved.flat());
   const now = mergeByModel(resolved[i]);
+  if (!now.some(s => s.objectRuntimeIds.length)) return log('This step contains no objects. Nothing was changed.');
 
   await v.setObjectState(undefined, { color: 'reset', visible: 'reset' });
   if ($('others').value === 'hide') await v.setObjectState(undefined, { visible: false });
+  // every other object (all other rebar groups too): light grey + very transparent
+  if ($('others').value === 'grey') await v.setObjectState(undefined, { visible: true, color: greyColor() });
   // every rebar of the cage: light grey + very transparent
   await v.setObjectState({ modelObjectIds: allBars }, { visible: true, color: greyColor() });
   // the rebars to place now: original (or chosen) colour, fully opaque
@@ -240,7 +266,7 @@ $('list').addEventListener('click', async e => {
   if (a === 'up' && i > 0) { [steps[i - 1], steps[i]] = [steps[i], steps[i - 1]]; current = -1; save(); render(); }
   if (a === 'down' && i < steps.length - 1) { [steps[i + 1], steps[i]] = [steps[i], steps[i + 1]]; current = -1; save(); render(); }
   if (a === 'repl') {
-    const sel = await API.viewer.getSelection();
+    const sel = await expandSelection(await API.viewer.getSelection());
     if (!sel || !sel.length) return log('Select rebars in the 3D view first.');
     steps[i].items = await storeItems(sel); save(); render();
   }
