@@ -35,7 +35,7 @@
 <div class="row"><label>Rest of model</label>
   <select id="others"><option value="grey">Light grey + transparent</option><option value="hide">Hide</option><option value="leave">Leave as it is</option></select></div>
 <div class="row"><label>Rebars to place</label>
-  <select id="activeColor"><option value="reset">Original colour</option><option value="#e8a200">Orange</option><option value="#d62828">Red</option><option value="#0063a3">Blue</option></select></div>
+  <select id="activeColor"><option value="reset">Original colour</option><option value="#2e9e44">Green</option><option value="#e8a200">Orange</option><option value="#d62828">Red</option><option value="#0063a3">Blue</option></select></div>
 <div class="row"><label>Camera</label>
   <select id="camera"><option value="keep">Keep my camera</option><option value="fit">Zoom to rebars of the step</option></select></div>
 
@@ -194,6 +194,25 @@ function mergeByModel(list) {
   return [...m.entries()].map(([modelId, objectRuntimeIds]) => ({ modelId, objectRuntimeIds }));
 }
 
+// list minus the objects in "remove" (both are lists of { modelId, objectRuntimeIds })
+function subtract(list, remove) {
+  const rm = new Map();
+  for (const s of remove) {
+    if (!rm.has(s.modelId)) rm.set(s.modelId, new Set());
+    s.objectRuntimeIds.forEach(x => rm.get(s.modelId).add(x));
+  }
+  return list
+    .map(s => ({ modelId: s.modelId, objectRuntimeIds: s.objectRuntimeIds.filter(x => !(rm.has(s.modelId) && rm.get(s.modelId).has(x))) }))
+    .filter(s => s.objectRuntimeIds.length);
+}
+// every object of every loaded model
+async function allObjects() {
+  const r = await API.viewer.getObjects();
+  const out = r.map(m => ({ modelId: m.modelId, objectRuntimeIds: (m.objects || []).map(o => o.id) })).filter(s => s.objectRuntimeIds.length);
+  if (!out.length) throw new Error('no objects');
+  return out;
+}
+
 async function applyStep(i) {
   if (!API) return log('Not connected.');
   const v = API.viewer;
@@ -204,14 +223,29 @@ async function applyStep(i) {
   if (!now.some(s => s.objectRuntimeIds.length)) return log('This step contains no objects. Nothing was changed.');
 
   await v.setObjectState(undefined, { color: 'reset', visible: 'reset' });
-  if ($('others').value === 'hide') await v.setObjectState(undefined, { visible: false });
-  // every other object (all other rebar groups too): light grey + very transparent
-  if ($('others').value === 'grey') await v.setObjectState(undefined, { visible: true, color: greyColor() });
-  // every rebar of the cage: light grey + very transparent
-  await v.setObjectState({ modelObjectIds: allBars }, { visible: true, color: greyColor() });
-  // the rebars to place now: original (or chosen) colour, fully opaque
+  const mode = $('others').value;
   const ac = $('activeColor').value;
-  await v.setObjectState({ modelObjectIds: now }, { visible: true, color: ac === 'reset' ? 'reset' : ac });
+  let activeColor = ac === 'reset' ? 'reset' : hexToRgba(ac, 255);
+  let toGrey;
+  if (mode === 'grey') {
+    // grey + transparent for everything EXCEPT the step's bars (they are never made transparent)
+    try {
+      toGrey = subtract(await allObjects(), now);
+    } catch (e) { toGrey = null; }
+    if (!toGrey) {
+      // fallback: grey everything, then give the step's bars an explicit solid colour
+      await v.setObjectState(undefined, { visible: true, color: greyColor() });
+      toGrey = [];
+      if (ac === 'reset') activeColor = hexToRgba('#e8a200', 255);
+      log('Could not list all objects, so the step is shown in orange instead of its original colour.');
+    }
+  } else {
+    if (mode === 'hide') await v.setObjectState(undefined, { visible: false });
+    toGrey = subtract(allBars, now); // all bars of the steps, except the current step
+  }
+  if (toGrey.length) await v.setObjectState({ modelObjectIds: toGrey }, { visible: true, color: greyColor() });
+  // the bars to place now: original (or chosen) colour, fully solid
+  await v.setObjectState({ modelObjectIds: now }, { visible: true, color: activeColor });
   if ($('camera').value === 'fit') await v.setCamera({ modelObjectIds: now }, { animationTime: 0 });
   current = i; render();
   log('Showing "' + steps[i].name + '".');
